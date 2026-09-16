@@ -12,9 +12,14 @@ public static class DataRunParser
     public static List<DataRun> Parse(byte[] buffer, int offset, int length)
     {
         var runs = new List<DataRun>();
+        if (offset < 0 || offset > buffer.Length || length < 0) return runs;
+
         long currentLcn = 0;
         int pos = offset;
-        int end = offset + length;
+        // Clamp to the buffer's real bounds: a corrupt record could declare
+        // a run-list length that overruns the record, and buffer[pos++]
+        // below would throw IndexOutOfRangeException otherwise.
+        int end = (int)Math.Min((long)offset + length, buffer.Length);
 
         while (pos < end)
         {

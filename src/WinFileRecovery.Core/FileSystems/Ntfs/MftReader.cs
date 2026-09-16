@@ -43,8 +43,33 @@ public sealed class MftReader
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                byte[] raw = _volume.ReadSectors(sector, sectorsPerRecord);
-                var rec = MftRecord.Parse(raw, recordsRead, _boot.BytesPerSector);
+                byte[] raw;
+                try
+                {
+                    raw = _volume.ReadSectors(sector, sectorsPerRecord);
+                }
+                catch (System.ComponentModel.Win32Exception)
+                {
+                    // Read past the end of the device, or a bad sector —
+                    // stop this run rather than aborting the whole scan;
+                    // records already found stay valid.
+                    yield break;
+                }
+
+                if (raw.Length < sectorsPerRecord * _boot.BytesPerSector)
+                    yield break; // short read: reached the real end of the device
+
+                MftRecord? rec = null;
+                try
+                {
+                    rec = MftRecord.Parse(raw, recordsRead, _boot.BytesPerSector);
+                }
+                catch (Exception)
+                {
+                    // A single corrupt/garbage record shouldn't abort
+                    // scanning the rest of the table.
+                }
+
                 if (rec is not null)
                     yield return rec;
 

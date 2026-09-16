@@ -82,6 +82,6 @@ public sealed class NtfsRecoveryEngine
     private static string GetExtension(string fileName)
     {
         int dot = fileName.LastIndexOf('.');
-        return dot >= 0 && dot < fileName.Length - 1 ? fileName[(dot + 1)..] : "bin";
+        return dot >= 0 && dot < fileName.Length - 1 ? fileName[(dot + 1)..].ToLowerInvariant() : "bin";
     }
 }

@@ -1,3 +1,4 @@
+using System.Linq;
 using WinFileRecovery.Core.Native;
 using WinFileRecovery.Core.Recovery;
 
@@ -24,13 +25,30 @@ public sealed class Fat32RecoveryEngine
         directoriesToVisit.Enqueue(boot.RootCluster);
         var visited = new HashSet<uint>();
 
-        while (directoriesToVisit.Count > 0)
+        // Safety cap: a corrupt directory tree could otherwise reference an
+        // unbounded number of garbage "subdirectories", each costing a disk read.
+        const int maxDirectoriesToVisit = 500_000;
+
+        while (directoriesToVisit.Count > 0 && visited.Count < maxDirectoriesToVisit)
         {
             cancellationToken.ThrowIfCancellationRequested();
             uint dirCluster = directoriesToVisit.Dequeue();
             if (!visited.Add(dirCluster)) continue;
 
-            foreach (var (entry, subDirCluster) in ReadDirectory(volume, boot, dirCluster))
+            List<(Fat32DirectoryEntry Entry, uint? SubDirCluster)> entries;
+            try
+            {
+                // A directory entry can point at a corrupt/garbage cluster
+                // number; materializing eagerly here means one bad read
+                // fails only this directory, not the whole scan.
+                entries = ReadDirectory(volume, boot, dirCluster).ToList();
+            }
+            catch (Exception)
+            {
+                continue;
+            }
+
+            foreach (var (entry, subDirCluster) in entries)
             {
                 if (subDirCluster is { } sub && sub >= 2)
                 {

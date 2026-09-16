@@ -38,7 +38,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public int ScanModeIndex
     {
         get => _scanModeIndex;
-        set { _scanModeIndex = value; OnPropertyChanged(nameof(ScanModeIndex)); }
+        set
+        {
+            _scanModeIndex = value;
+            OnPropertyChanged(nameof(ScanModeIndex));
+            OnPropertyChanged(nameof(IsDateFilterUsable));
+        }
     }
 
     private double _progress;
@@ -121,6 +126,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     public bool IsDateFilterActive => DateFrom is not null || DateTo is not null;
 
+    /// <summary>Whether the date filter can apply at all — deep/signature scans carry no timestamp metadata.</summary>
+    public bool IsDateFilterUsable => ScanModeIndex == 0;
+
+    public ObservableCollection<SelectableItem<FileCategory>> FileCategories { get; } = new();
+
     public RelayCommand RefreshDrivesCommand { get; }
     public RelayCommand ScanCommand { get; }
     public RelayCommand CancelCommand { get; }
@@ -131,6 +141,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
     {
         ScanResultsView = CollectionViewSource.GetDefaultView(ScanResults);
         ScanResultsView.Filter = FilterByDate;
+
+        foreach (var category in FileCategory.All)
+            FileCategories.Add(new SelectableItem<FileCategory>(category) { IsSelected = true });
 
         RefreshDrivesCommand = new RelayCommand(RefreshDrivesAsync);
         ScanCommand = new RelayCommand(ScanAsync, () => !IsBusy && SelectedDrive is not null);
@@ -216,12 +229,19 @@ public sealed class MainViewModel : INotifyPropertyChanged
         using var disk = RawDisk.Open(drive.DevicePath);
         var results = new List<RecoverableFile>();
 
+        var allowedExtensions = GetAllowedExtensions();
+        bool ExtensionAllowed(string ext) => allowedExtensions is null || allowedExtensions.Contains(ext.ToLowerInvariant());
+
         if (ScanModeIndex == 0)
         {
             // Быстрый путь: пробуем NTFS, затем FAT32 — по сигнатуре загрузочного сектора.
+            // Дата/тип применяются сразу при переборе — меньше памяти и не
+            // приходится хранить лишние результаты, которые всё равно будут скрыты.
             try
             {
-                results.AddRange(new NtfsRecoveryEngine().FindDeletedFiles(disk, progress, token));
+                foreach (var f in new NtfsRecoveryEngine().FindDeletedFiles(disk, progress, token))
+                    if (ExtensionAllowed(f.Extension) && MatchesDateFilter(f))
+                        results.Add(f);
                 return results;
             }
             catch (InvalidDataException)
@@ -229,9 +249,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 // Не NTFS — пробуем FAT32.
             }
 
+            results.Clear();
             try
             {
-                results.AddRange(new Fat32RecoveryEngine().FindDeletedFiles(disk, progress, token));
+                foreach (var f in new Fat32RecoveryEngine().FindDeletedFiles(disk, progress, token))
+                    if (ExtensionAllowed(f.Extension) && MatchesDateFilter(f))
+                        results.Add(f);
                 return results;
             }
             catch (InvalidDataException)
@@ -241,10 +264,37 @@ public sealed class MainViewModel : INotifyPropertyChanged
             }
         }
 
-        // Глубокий поиск: сигнатурный carving по всему устройству.
+        // Глубокий поиск: сигнатурный carving по всему устройству. Дата
+        // недоступна (нет метаданных ФС), но ограничение по типу файла
+        // реально ускоряет поиск — меньше сигнатур ищется в каждом окне.
+        var signatures = allowedExtensions is null
+            ? SignatureCatalog.Default
+            : SignatureCatalog.Default.Where(s => allowedExtensions.Contains(s.Extension)).ToList();
+
         long totalSectors = disk.LengthBytes / disk.SectorSize;
-        results.AddRange(new SignatureCarver().Scan(disk, 0, totalSectors, progress, token));
+        results.AddRange(new SignatureCarver(signatures).Scan(disk, 0, totalSectors, progress, token));
         return results;
+    }
+
+    private HashSet<string>? GetAllowedExtensions()
+    {
+        var checkedCategories = FileCategories.Where(c => c.IsSelected).ToList();
+        if (checkedCategories.Count == FileCategories.Count || checkedCategories.Count == 0)
+            return null; // всё выбрано (или ничего не тронуто) — фильтр по типу не сужает поиск
+
+        return checkedCategories.SelectMany(c => c.Value.Extensions).ToHashSet();
+    }
+
+    private bool MatchesDateFilter(RecoverableFile file)
+    {
+        if (DateFrom is null && DateTo is null) return true;
+
+        DateTime? ts = file.EstimatedDeletionUtc?.ToLocalTime();
+        if (ts is null) return false;
+
+        if (DateFrom is { } from && ts < from.Date) return false;
+        if (DateTo is { } to && ts >= to.Date.AddDays(1)) return false;
+        return true;
     }
 
     private Task CancelAsync()

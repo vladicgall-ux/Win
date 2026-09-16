@@ -93,13 +93,24 @@ public sealed class MftRecord
                     ushort nameLength = record[pos + 9];
                     if (nameLength == 0) // unnamed => the primary data stream
                     {
+                        // Bounds-check the fixed attribute header before
+                        // reading it — a truncated/corrupt attribute would
+                        // otherwise throw and abort the whole scan.
+                        if (nonResidentFlag == 0 && pos + 24 > record.Length) break;
+                        if (nonResidentFlag != 0 && pos + 56 > record.Length) break;
+
                         if (nonResidentFlag == 0)
                         {
                             dataResident = true;
                             uint contentLen = BitConverter.ToUInt32(record, pos + 16);
                             ushort contentOffset = BitConverter.ToUInt16(record, pos + 20);
+                            int copyStart = pos + contentOffset;
+                            int copyLength = copyStart >= 0 && copyStart <= record.Length
+                                ? (int)Math.Min(contentLen, record.Length - copyStart)
+                                : 0;
                             residentData = new byte[contentLen];
-                            Array.Copy(record, pos + contentOffset, residentData, 0, (int)Math.Min(contentLen, record.Length - (pos + contentOffset)));
+                            if (copyLength > 0)
+                                Array.Copy(record, copyStart, residentData, 0, copyLength);
                             logicalSize = contentLen;
                         }
                         else
@@ -132,9 +143,10 @@ public sealed class MftRecord
 
     private static DateTime? ParseStandardInformationRecordChanged(byte[] record, int attrPos)
     {
+        if (attrPos + 22 > record.Length) return null;
         ushort contentOffset = BitConverter.ToUInt16(record, attrPos + 20);
         int contentStart = attrPos + contentOffset;
-        if (contentStart + 24 > record.Length) return null;
+        if (contentStart < 0 || contentStart + 24 > record.Length) return null;
 
         long fileTime = BitConverter.ToInt64(record, contentStart + 16); // MFT-changed time
         return FileTimeToUtc(fileTime);
@@ -155,15 +167,21 @@ public sealed class MftRecord
 
     private static string ParseFileNameAttribute(byte[] record, int attrPos)
     {
+        if (attrPos + 22 > record.Length) return string.Empty;
         ushort contentOffset = BitConverter.ToUInt16(record, attrPos + 20);
         int nameStart = attrPos + contentOffset;
 
+        // Bounds-check before touching the fixed part of the $FILE_NAME
+        // content (through the name-length byte at +64); a truncated or
+        // corrupt record could otherwise throw IndexOutOfRangeException
+        // and abort the whole scan over a single bad entry.
+        if (nameStart < 0 || nameStart + 66 > record.Length) return string.Empty;
+
         byte nameLengthChars = record[nameStart + 64];
-        byte nameSpace = record[nameStart + 65]; // namespace: 0=POSIX,1=Win32,2=DOS,3=Win32&DOS
 
         int nameBytesStart = nameStart + 66;
         int nameByteLength = nameLengthChars * 2;
-        if (nameBytesStart + nameByteLength > record.Length) return string.Empty;
+        if (nameByteLength < 0 || nameBytesStart + nameByteLength > record.Length) return string.Empty;
 
         return Encoding.Unicode.GetString(record, nameBytesStart, nameByteLength);
     }
@@ -179,7 +197,7 @@ public sealed class MftRecord
         ushort usaOffset = BitConverter.ToUInt16(record, 4);
         ushort usaCount = BitConverter.ToUInt16(record, 6); // includes the USN itself
 
-        if (usaOffset == 0 || usaCount < 1) return record;
+        if (usaOffset == 0 || usaCount < 1 || usaOffset + 2 > record.Length) return record;
 
         ushort updateSequenceNumber = BitConverter.ToUInt16(record, usaOffset);
 
