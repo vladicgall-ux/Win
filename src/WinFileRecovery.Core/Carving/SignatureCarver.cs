@@ -1,3 +1,4 @@
+using WinFileRecovery.Core.Carving.FormatValidators;
 using WinFileRecovery.Core.Native;
 using WinFileRecovery.Core.Recovery;
 
@@ -114,6 +115,19 @@ public sealed class SignatureCarver
 
     private long DetermineLength(byte[] window, int headerIndex, FileSignature sig, RawDisk disk, long absoluteStart)
     {
+        // Prefer walking the format's real internal structure — this is what
+        // avoids a false-short match, e.g. an FF D9 byte pair that happens
+        // to appear inside JPEG scan data long before the image actually ends.
+        var validator = FormatValidatorCatalog.TryGet(sig.Extension);
+        if (validator is not null)
+        {
+            long? structuralLength = validator.DetermineLength(disk, absoluteStart, sig.MaxSizeBytes);
+            if (structuralLength is > 0)
+                return structuralLength.Value;
+            // Falls through to the heuristic below if the structure couldn't
+            // be walked confidently (e.g. a streamed ZIP, or truly corrupt data).
+        }
+
         if (sig.Footer is { Length: > 0 })
         {
             int footerIdx = IndexOf(window, sig.Footer, headerIndex + sig.Header.Length);

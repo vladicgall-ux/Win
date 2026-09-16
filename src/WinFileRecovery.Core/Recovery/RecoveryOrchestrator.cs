@@ -160,7 +160,7 @@ public sealed class RecoveryOrchestrator
         return results;
     }
 
-    private static string NormalizeDirectory(string directory) =>
+    internal static string NormalizeDirectory(string directory) =>
         Path.GetFullPath(directory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
         + Path.DirectorySeparatorChar;
 
@@ -171,7 +171,7 @@ public sealed class RecoveryOrchestrator
     /// guarantee against path traversal — it checks the fact, not just the
     /// input that was supposed to prevent it.
     /// </summary>
-    private static string ResolveWithinDestination(string destinationDirectory, string normalizedDestination, string fileName)
+    internal static string ResolveWithinDestination(string destinationDirectory, string normalizedDestination, string fileName)
     {
         string candidate = Path.GetFullPath(Path.Combine(destinationDirectory, fileName));
         if (!candidate.StartsWith(normalizedDestination, StringComparison.OrdinalIgnoreCase))
@@ -212,7 +212,7 @@ public sealed class RecoveryOrchestrator
     /// metadata (an NTFS $FILE_NAME, a FAT short name, or a synthesized
     /// carving name) before it is ever used to build a filesystem path.
     /// </summary>
-    private static string MakeSafeFileName(string name)
+    internal static string MakeSafeFileName(string name)
     {
         // Path separators and invalid chars first — a name containing "/"
         // or "\" must not be allowed to reintroduce path structure.

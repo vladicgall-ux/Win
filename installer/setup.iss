@@ -2,6 +2,10 @@
 ; Build the app first (see README "Publish"), then compile this script
 ; with Inno Setup (ISCC.exe setup.iss) to produce a single installer exe.
 
+; TODO before a real release: MyAppPublisher below is a placeholder — set it
+; to the actual legal entity name before shipping (it shows in the UAC
+; prompt, Programs & Features, and should match the Authenticode cert's
+; subject once the exe is signed — see .github/workflows/build-installer.yml).
 #define MyAppName "WinFileRecovery"
 #define MyAppVersion "1.0.0"
 #define MyAppPublisher "YourCompany"

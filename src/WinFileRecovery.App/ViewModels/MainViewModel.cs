@@ -9,6 +9,7 @@ using WinFileRecovery.Core.Carving;
 using WinFileRecovery.Core.Disks;
 using WinFileRecovery.Core.FileSystems.Fat32;
 using WinFileRecovery.Core.FileSystems.Ntfs;
+using WinFileRecovery.Core.Logging;
 using WinFileRecovery.Core.Native;
 using WinFileRecovery.Core.Recovery;
 using WinFileRecovery.Core.Verification;
@@ -198,6 +199,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
         StatusText = "Идёт поиск удалённых файлов, это может занять время...";
 
         var progress = new Progress<double>(p => Progress = p * 100.0);
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        string scanMode = ScanModeIndex == 0 ? "fast" : "deep";
 
         try
         {
@@ -209,6 +212,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
             StatusText = ScanResults.Count > 0
                 ? $"Найдено файлов для восстановления: {ScanResults.Count}. Отметьте нужные и нажмите «Восстановить»."
                 : "Удалённые файлы не найдены. Попробуйте глубокий поиск.";
+
+            OperationLogger.LogOperation($"scan.{scanMode}", "ok", stopwatch.Elapsed, ScanResults.Count);
 
             if (_lastScanWasTruncated)
             {
@@ -224,10 +229,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
         catch (OperationCanceledException)
         {
             StatusText = "Поиск остановлен.";
+            OperationLogger.LogOperation($"scan.{scanMode}", "cancelled", stopwatch.Elapsed);
         }
         catch (Exception ex)
         {
             StatusText = "Не удалось выполнить поиск — см. окно ошибки.";
+            OperationLogger.LogError($"scan.{scanMode}", ex.GetType().Name + ": " + ex.Message);
             MessageBox.Show(FriendlyError(ex), "Ошибка поиска", MessageBoxButton.OK, MessageBoxImage.Error);
         }
         finally
@@ -350,9 +357,16 @@ public sealed class MainViewModel : INotifyPropertyChanged
             return;
         }
 
+        if (!TryCheckFreeSpace(destination, toRecover, out string spaceError))
+        {
+            MessageBox.Show(spaceError, "Недостаточно места", MessageBoxButton.OK, MessageBoxImage.Error);
+            return;
+        }
+
         IsBusy = true;
         StatusText = "Восстановление файлов...";
         var progress = new Progress<(int done, int total)>(p => StatusText = $"Восстановлено {p.done} из {p.total}...");
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
 
         try
         {
@@ -368,6 +382,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
             int succeeded = log.Count(r => r.Succeeded);
             int failed = log.Count(r => !r.Succeeded);
+            OperationLogger.LogOperation("recover", failed > 0 ? "partial" : "ok", stopwatch.Elapsed, succeeded, failed);
             int signedValid = log.Count(r => r.SignatureStatus == AuthenticodeStatus.Valid);
             int signedInvalid = log.Count(r => r.SignatureStatus == AuthenticodeStatus.Invalid);
 
@@ -392,12 +407,54 @@ public sealed class MainViewModel : INotifyPropertyChanged
         catch (Exception ex)
         {
             StatusText = "Не удалось восстановить файлы — см. окно ошибки.";
+            OperationLogger.LogError("recover", ex.GetType().Name + ": " + ex.Message);
             MessageBox.Show(FriendlyError(ex), "Ошибка восстановления", MessageBoxButton.OK, MessageBoxImage.Error);
         }
         finally
         {
             IsBusy = false;
         }
+    }
+
+    /// <summary>
+    /// Estimates the space recovery will need and compares it against what's
+    /// actually free at the destination, with a 5% safety margin — running
+    /// out of space mid-batch would otherwise leave a half-written file and
+    /// abort recovery of everything queued after it.
+    /// </summary>
+    private static bool TryCheckFreeSpace(string destination, List<RecoverableFile> toRecover, out string error)
+    {
+        error = "";
+        long neededBytes = toRecover.Sum(f => f.LengthBytes);
+        long neededWithMargin = neededBytes + neededBytes / 20 + 10 * 1024 * 1024; // +5% and a 10 MB floor
+
+        long availableBytes;
+        try
+        {
+            var drive = new DriveInfo(Path.GetPathRoot(Path.GetFullPath(destination)) ?? destination);
+            availableBytes = drive.AvailableFreeSpace;
+        }
+        catch (Exception)
+        {
+            return true; // couldn't determine free space (e.g. exotic path) — don't block on an unverifiable check
+        }
+
+        if (availableBytes >= neededWithMargin) return true;
+
+        error = $"На выбранном диске недостаточно свободного места.\n\n" +
+                $"Нужно примерно: {FormatBytes(neededWithMargin)}\n" +
+                $"Свободно: {FormatBytes(availableBytes)}\n\n" +
+                "Выберите папку на диске с большим объёмом свободного места, либо отметьте меньше файлов для восстановления.";
+        return false;
+    }
+
+    private static string FormatBytes(long bytes)
+    {
+        string[] units = { "Б", "КБ", "МБ", "ГБ", "ТБ" };
+        double size = bytes;
+        int unit = 0;
+        while (size >= 1024 && unit < units.Length - 1) { size /= 1024; unit++; }
+        return $"{size:0.#} {units[unit]}";
     }
 
     private static string FriendlyError(Exception ex) =>

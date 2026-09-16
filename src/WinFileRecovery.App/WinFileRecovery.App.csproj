@@ -12,6 +12,20 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <!-- Add <ApplicationIcon>app.ico</ApplicationIcon> once you have a real .ico file. -->
 
+    <!--
+      Assembly metadata shown in the exe's Properties > Details tab and by
+      SmartScreen/AV prompts. TODO before a real release: replace the
+      placeholder company/publisher name with the actual legal entity, and
+      set up Authenticode signing (see installer/setup.iss and
+      .github/workflows/build-installer.yml for the signing hook).
+    -->
+    <Company>YourCompany</Company>
+    <Product>WinFileRecovery</Product>
+    <AssemblyTitle>WinFileRecovery</AssemblyTitle>
+    <Description>Восстановление удалённых файлов (NTFS/FAT32)</Description>
+    <Version>1.0.0</Version>
+    <Copyright>Copyright © YourCompany $([System.DateTime]::Now.Year)</Copyright>
+
     <!-- Single-file, self-contained publish settings (see README "Publish"). -->
     <SelfContained>true</SelfContained>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
