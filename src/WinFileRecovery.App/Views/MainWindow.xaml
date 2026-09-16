@@ -39,18 +39,34 @@
             <TextBlock Text="{Binding StatusText}" VerticalAlignment="Center" Margin="12,0,0,0"/>
         </StackPanel>
 
-        <!-- Results -->
-        <DataGrid Grid.Row="2" ItemsSource="{Binding Results}"
-                  SelectionMode="Extended" AutoGenerateColumns="False" IsReadOnly="True"
-                  SelectionChanged="ResultsGrid_SelectionChanged" x:Name="ResultsGrid">
-            <DataGrid.Columns>
-                <DataGridTextColumn Header="Имя" Binding="{Binding DisplayName}" Width="260"/>
-                <DataGridTextColumn Header="Тип" Binding="{Binding Extension}" Width="60"/>
-                <DataGridTextColumn Header="Размер (байт)" Binding="{Binding LengthBytes}" Width="120"/>
-                <DataGridTextColumn Header="Смещение" Binding="{Binding StartOffsetBytes}" Width="120"/>
-                <DataGridTextColumn Header="Источник" Binding="{Binding Source}" Width="140"/>
-            </DataGrid.Columns>
-        </DataGrid>
+        <!-- Results / recovery report -->
+        <TabControl Grid.Row="2">
+            <TabItem Header="Найденные файлы">
+                <DataGrid ItemsSource="{Binding Results}"
+                          SelectionMode="Extended" AutoGenerateColumns="False" IsReadOnly="True"
+                          SelectionChanged="ResultsGrid_SelectionChanged" x:Name="ResultsGrid">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="Имя" Binding="{Binding DisplayName}" Width="260"/>
+                        <DataGridTextColumn Header="Тип" Binding="{Binding Extension}" Width="60"/>
+                        <DataGridTextColumn Header="Размер (байт)" Binding="{Binding LengthBytes}" Width="120"/>
+                        <DataGridTextColumn Header="Смещение" Binding="{Binding StartOffsetBytes}" Width="120"/>
+                        <DataGridTextColumn Header="Источник" Binding="{Binding Source}" Width="140"/>
+                    </DataGrid.Columns>
+                </DataGrid>
+            </TabItem>
+            <TabItem Header="Отчёт восстановления (SHA-256 / подпись)">
+                <DataGrid ItemsSource="{Binding RecoveryLog}"
+                          AutoGenerateColumns="False" IsReadOnly="True">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="Имя" Binding="{Binding OriginalDisplayName}" Width="220"/>
+                        <DataGridTextColumn Header="Путь" Binding="{Binding DestinationPath}" Width="260"/>
+                        <DataGridTextColumn Header="Размер (байт)" Binding="{Binding SizeBytes}" Width="110"/>
+                        <DataGridTextColumn Header="SHA-256" Binding="{Binding Sha256}" Width="240"/>
+                        <DataGridTextColumn Header="Authenticode" Binding="{Binding SignatureStatus}" Width="110"/>
+                    </DataGrid.Columns>
+                </DataGrid>
+            </TabItem>
+        </TabControl>
 
         <!-- Recover -->
         <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="0,8,0,0">

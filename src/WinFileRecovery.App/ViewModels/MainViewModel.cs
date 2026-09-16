@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
+using System.Linq;
 using System.Runtime.Versioning;
 using System.Windows;
 using WinFileRecovery.Core.Carving;
@@ -9,6 +10,7 @@ using WinFileRecovery.Core.FileSystems.Fat32;
 using WinFileRecovery.Core.FileSystems.Ntfs;
 using WinFileRecovery.Core.Native;
 using WinFileRecovery.Core.Recovery;
+using WinFileRecovery.Core.Verification;
 
 namespace WinFileRecovery.App.ViewModels;
 
@@ -21,6 +23,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public ObservableCollection<PhysicalDrive> Drives { get; } = new();
     public ObservableCollection<RecoverableFile> Results { get; } = new();
     public ObservableCollection<RecoverableFile> SelectedResults { get; } = new();
+    public ObservableCollection<RecoveredFileResult> RecoveryLog { get; } = new();
 
     private PhysicalDrive? _selectedDrive;
     public PhysicalDrive? SelectedDrive
@@ -182,15 +185,29 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         try
         {
-            await Task.Run(() =>
+            List<RecoveredFileResult> log = await Task.Run(() =>
             {
                 using var disk = RawDisk.Open(SelectedDrive.DevicePath);
-                _orchestrator.RecoverMany(disk, toRecover, destination, progress);
+                return _orchestrator.RecoverMany(disk, toRecover, destination, progress);
             });
 
-            StatusText = $"Восстановлено файлов: {toRecover.Count} -> {destination}";
-            MessageBox.Show($"Восстановлено {toRecover.Count} файл(ов) в {destination}", "Готово",
-                MessageBoxButton.OK, MessageBoxImage.Information);
+            RecoveryLog.Clear();
+            foreach (var entry in log)
+                RecoveryLog.Add(entry);
+
+            int signedValid = log.Count(r => r.SignatureStatus == AuthenticodeStatus.Valid);
+            int signedInvalid = log.Count(r => r.SignatureStatus == AuthenticodeStatus.Invalid);
+
+            StatusText = $"Восстановлено файлов: {log.Count} -> {destination}";
+
+            string summary = $"Восстановлено {log.Count} файл(ов) в {destination}\n\n" +
+                              $"SHA-256 посчитан для всех файлов (см. таблицу отчёта и recovery_report.csv в папке назначения).\n" +
+                              $"С валидной Authenticode-подписью: {signedValid}\n" +
+                              (signedInvalid > 0 ? $"С НЕВАЛИДНОЙ/повреждённой подписью: {signedInvalid} ⚠\n" : "") +
+                              "Остальные файлы просто не имеют подписи — это нормально для документов, фото и т.п.";
+
+            MessageBox.Show(summary, "Готово",
+                MessageBoxButton.OK, signedInvalid > 0 ? MessageBoxImage.Warning : MessageBoxImage.Information);
         }
         catch (Exception ex)
         {
