@@ -38,7 +38,8 @@ public sealed class NtfsRecoveryEngine
                     Source: RecoverySource.NtfsMft,
                     OriginalName: record.FileName,
                     IsDeleted: true,
-                    ResidentData: record.ResidentData);
+                    ResidentData: record.ResidentData,
+                    EstimatedDeletionUtc: record.RecordChangedUtc);
                 continue;
             }
 
@@ -54,7 +55,8 @@ public sealed class NtfsRecoveryEngine
                 Source: RecoverySource.NtfsMft,
                 OriginalName: record.FileName,
                 IsDeleted: true,
-                Extents: extents);
+                Extents: extents,
+                EstimatedDeletionUtc: record.RecordChangedUtc);
         }
     }
 

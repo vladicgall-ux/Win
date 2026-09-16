@@ -26,6 +26,14 @@ public sealed class Fat32DirectoryEntry
     public uint StartCluster { get; init; }
     public uint FileSize { get; init; }
 
+    /// <summary>
+    /// Last-write date/time stored in the entry, local to whatever clock
+    /// wrote it (FAT has no timezone). FAT doesn't track a deletion time at
+    /// all, so this — the closest available field — is used as a rough
+    /// stand-in for "when this file was last touched before deletion".
+    /// </summary>
+    public DateTime? LastWriteTime { get; init; }
+
     public static Fat32DirectoryEntry? Parse(byte[] buffer, int offset)
     {
         byte firstByte = buffer[offset];
@@ -49,6 +57,9 @@ public sealed class Fat32DirectoryEntry
         uint startCluster = ((uint)highCluster << 16) | lowCluster;
         uint fileSize = BitConverter.ToUInt32(buffer, offset + 28);
 
+        ushort writeTimeRaw = BitConverter.ToUInt16(buffer, offset + 22);
+        ushort writeDateRaw = BitConverter.ToUInt16(buffer, offset + 24);
+
         return new Fat32DirectoryEntry
         {
             ShortName = shortName,
@@ -57,6 +68,28 @@ public sealed class Fat32DirectoryEntry
             IsVolumeLabel = (attributes & 0x08) != 0,
             StartCluster = startCluster,
             FileSize = fileSize,
+            LastWriteTime = ParseFatDateTime(writeDateRaw, writeTimeRaw),
         };
+    }
+
+    private static DateTime? ParseFatDateTime(ushort dateRaw, ushort timeRaw)
+    {
+        if (dateRaw == 0) return null;
+
+        int year = 1980 + (dateRaw >> 9);
+        int month = (dateRaw >> 5) & 0x0F;
+        int day = dateRaw & 0x1F;
+        int hour = timeRaw >> 11;
+        int minute = (timeRaw >> 5) & 0x3F;
+        int second = (timeRaw & 0x1F) * 2;
+
+        try
+        {
+            return new DateTime(year, Math.Max(month, 1), Math.Max(day, 1), hour, minute, second);
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return null; // corrupt/garbage timestamp in an overwritten entry
+        }
     }
 }

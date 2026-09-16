@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Runtime.Versioning;
 using System.Windows;
+using System.Windows.Data;
 using WinFileRecovery.Core.Carving;
 using WinFileRecovery.Core.Disks;
 using WinFileRecovery.Core.FileSystems.Fat32;
@@ -23,6 +24,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public ObservableCollection<PhysicalDrive> Drives { get; } = new();
     public ObservableCollection<SelectableItem<RecoverableFile>> ScanResults { get; } = new();
     public ObservableCollection<RecoveredFileResult> RecoveryLog { get; } = new();
+    public ICollectionView ScanResultsView { get; }
 
     private PhysicalDrive? _selectedDrive;
     public PhysicalDrive? SelectedDrive
@@ -84,24 +86,77 @@ public sealed class MainViewModel : INotifyPropertyChanged
         {
             _selectAll = value;
             OnPropertyChanged(nameof(SelectAll));
-            foreach (var item in ScanResults)
+            // Only touches items currently passing the date filter — a
+            // hidden item shouldn't silently get (de)selected underneath the user.
+            foreach (var item in ScanResultsView.Cast<SelectableItem<RecoverableFile>>())
                 item.IsSelected = value;
         }
     }
+
+    private DateTime? _dateFrom;
+    public DateTime? DateFrom
+    {
+        get => _dateFrom;
+        set
+        {
+            _dateFrom = value;
+            OnPropertyChanged(nameof(DateFrom));
+            OnPropertyChanged(nameof(IsDateFilterActive));
+            ScanResultsView.Refresh();
+        }
+    }
+
+    private DateTime? _dateTo;
+    public DateTime? DateTo
+    {
+        get => _dateTo;
+        set
+        {
+            _dateTo = value;
+            OnPropertyChanged(nameof(DateTo));
+            OnPropertyChanged(nameof(IsDateFilterActive));
+            ScanResultsView.Refresh();
+        }
+    }
+
+    public bool IsDateFilterActive => DateFrom is not null || DateTo is not null;
 
     public RelayCommand RefreshDrivesCommand { get; }
     public RelayCommand ScanCommand { get; }
     public RelayCommand CancelCommand { get; }
     public RelayCommand RecoverSelectedCommand { get; }
+    public RelayCommand ClearDateFilterCommand { get; }
 
     public MainViewModel()
     {
+        ScanResultsView = CollectionViewSource.GetDefaultView(ScanResults);
+        ScanResultsView.Filter = FilterByDate;
+
         RefreshDrivesCommand = new RelayCommand(RefreshDrivesAsync);
         ScanCommand = new RelayCommand(ScanAsync, () => !IsBusy && SelectedDrive is not null);
         CancelCommand = new RelayCommand(CancelAsync, () => IsBusy);
         RecoverSelectedCommand = new RelayCommand(RecoverSelectedAsync, () => !IsBusy);
+        ClearDateFilterCommand = new RelayCommand(() => { DateFrom = null; DateTo = null; return Task.CompletedTask; });
 
         _ = RefreshDrivesAsync();
+    }
+
+    /// <summary>
+    /// A file with no known timestamp (always true for deep/signature-carved
+    /// results) is excluded once any date filter is set — we can't confirm
+    /// it falls in range, so it's safer to hide it than to wrongly include it.
+    /// </summary>
+    private bool FilterByDate(object obj)
+    {
+        if (DateFrom is null && DateTo is null) return true;
+        if (obj is not SelectableItem<RecoverableFile> item) return true;
+
+        DateTime? ts = item.Value.EstimatedDeletionUtc?.ToLocalTime();
+        if (ts is null) return false;
+
+        if (DateFrom is { } from && ts < from.Date) return false;
+        if (DateTo is { } to && ts >= to.Date.AddDays(1)) return false;
+        return true;
     }
 
     private Task RefreshDrivesAsync()

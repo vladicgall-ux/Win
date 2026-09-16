@@ -25,6 +25,13 @@ public readonly record struct FileExtent(long OffsetBytes, long LengthBytes);
 /// A tiny NTFS file can be "resident": its content is stored inline inside
 /// the MFT record rather than in disk clusters. Such files carry their
 /// bytes directly in ResidentData instead of an offset/extents.
+///
+/// EstimatedDeletionUtc is a best-effort timestamp for when the file was
+/// deleted (NTFS: the MFT record's own last-changed time; FAT32: the
+/// directory entry's last-write time, the closest thing FAT tracks). It is
+/// null for signature-carved files, which carry no filesystem metadata at
+/// all, and is always an approximation — treat it as "around this time",
+/// not an exact deletion timestamp.
 /// </summary>
 public sealed record RecoverableFile(
     string Extension,
@@ -34,7 +41,8 @@ public sealed record RecoverableFile(
     string? OriginalName,
     bool IsDeleted,
     IReadOnlyList<FileExtent>? Extents = null,
-    byte[]? ResidentData = null)
+    byte[]? ResidentData = null,
+    DateTime? EstimatedDeletionUtc = null)
 {
     public string DisplayName => OriginalName ?? $"recovered_{StartOffsetBytes:X}.{Extension}";
 }

@@ -25,6 +25,17 @@ public sealed class MftRecord
     public byte[]? ResidentData { get; init; }
     public List<DataRun> DataRuns { get; init; } = new();
 
+    /// <summary>
+    /// The MFT record's own "last changed" timestamp, from $STANDARD_INFORMATION.
+    /// NTFS updates this whenever the record itself is modified — including
+    /// when a file is deleted (the record is rewritten to clear the in-use
+    /// flag and unlink it) — so for a deleted record this is the closest
+    /// available approximation of "when it was deleted". It is not exact:
+    /// any other metadata change (rename, attribute edit) shortly before
+    /// deletion would also move this timestamp.
+    /// </summary>
+    public DateTime? RecordChangedUtc { get; init; }
+
     public bool IsDeleted => (Flags & MftRecordFlags.InUse) == 0;
     public bool IsDirectory => (Flags & MftRecordFlags.IsDirectory) != 0;
     public bool HasFileName => !string.IsNullOrEmpty(FileName);
@@ -51,6 +62,7 @@ public sealed class MftRecord
         byte[]? residentData = null;
         var dataRuns = new List<DataRun>();
         long logicalSize = 0;
+        DateTime? recordChangedUtc = null;
 
         int pos = firstAttrOffset;
         int limit = Math.Min((int)bytesUsed, record.Length);
@@ -67,6 +79,11 @@ public sealed class MftRecord
 
             switch (attrType)
             {
+                case 0x10: // $STANDARD_INFORMATION
+                    if (nonResidentFlag == 0)
+                        recordChangedUtc = ParseStandardInformationRecordChanged(record, pos);
+                    break;
+
                 case 0x30: // $FILE_NAME
                     if (nonResidentFlag == 0)
                         fileName = ParseFileNameAttribute(record, pos);
@@ -109,7 +126,31 @@ public sealed class MftRecord
             DataIsResident = dataResident,
             ResidentData = residentData,
             DataRuns = dataRuns,
+            RecordChangedUtc = recordChangedUtc,
         };
+    }
+
+    private static DateTime? ParseStandardInformationRecordChanged(byte[] record, int attrPos)
+    {
+        ushort contentOffset = BitConverter.ToUInt16(record, attrPos + 20);
+        int contentStart = attrPos + contentOffset;
+        if (contentStart + 24 > record.Length) return null;
+
+        long fileTime = BitConverter.ToInt64(record, contentStart + 16); // MFT-changed time
+        return FileTimeToUtc(fileTime);
+    }
+
+    private static DateTime? FileTimeToUtc(long windowsFileTime)
+    {
+        if (windowsFileTime <= 0) return null;
+        try
+        {
+            return DateTime.FromFileTimeUtc(windowsFileTime);
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return null; // corrupt/garbage timestamp in a damaged record
+        }
     }
 
     private static string ParseFileNameAttribute(byte[] record, int attrPos)

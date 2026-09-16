@@ -49,7 +49,8 @@ public sealed class Fat32RecoveryEngine
                     LengthBytes: entry.FileSize,
                     Source: RecoverySource.Fat32DirectoryEntry,
                     OriginalName: entry.ShortName,
-                    IsDeleted: true);
+                    IsDeleted: true,
+                    EstimatedDeletionUtc: entry.LastWriteTime);
             }
         }
 
