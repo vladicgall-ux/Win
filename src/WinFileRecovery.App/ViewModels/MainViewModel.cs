@@ -21,24 +21,22 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private CancellationTokenSource? _scanCts;
 
     public ObservableCollection<PhysicalDrive> Drives { get; } = new();
-    public ObservableCollection<RecoverableFile> Results { get; } = new();
-    public ObservableCollection<RecoverableFile> SelectedResults { get; } = new();
+    public ObservableCollection<SelectableItem<RecoverableFile>> ScanResults { get; } = new();
     public ObservableCollection<RecoveredFileResult> RecoveryLog { get; } = new();
 
     private PhysicalDrive? _selectedDrive;
     public PhysicalDrive? SelectedDrive
     {
         get => _selectedDrive;
-        set { _selectedDrive = value; OnPropertyChanged(nameof(SelectedDrive)); }
+        set { _selectedDrive = value; OnPropertyChanged(nameof(SelectedDrive)); ScanCommand.RaiseCanExecuteChanged(); }
     }
 
-    public string[] ScanModes { get; } = { "Быстрое сканирование (NTFS/FAT32 MFT)", "Глубокое сканирование (сигнатуры)" };
-
-    private string _selectedScanMode;
-    public string SelectedScanMode
+    // Index-based: 0 = быстрый (по файловой системе), 1 = глубокий (по сигнатурам).
+    private int _scanModeIndex;
+    public int ScanModeIndex
     {
-        get => _selectedScanMode;
-        set { _selectedScanMode = value; OnPropertyChanged(nameof(SelectedScanMode)); }
+        get => _scanModeIndex;
+        set { _scanModeIndex = value; OnPropertyChanged(nameof(ScanModeIndex)); }
     }
 
     private double _progress;
@@ -48,33 +46,60 @@ public sealed class MainViewModel : INotifyPropertyChanged
         set { _progress = value; OnPropertyChanged(nameof(Progress)); }
     }
 
-    private string _statusText = "Готово.";
+    private string _statusText = "Выберите диск и нажмите «Начать поиск».";
     public string StatusText
     {
         get => _statusText;
         set { _statusText = value; OnPropertyChanged(nameof(StatusText)); }
     }
 
-    private bool _isScanning;
-    public bool IsScanning
+    private bool _isBusy;
+    public bool IsBusy
     {
-        get => _isScanning;
-        set { _isScanning = value; OnPropertyChanged(nameof(IsScanning)); ScanCommand.RaiseCanExecuteChanged(); }
+        get => _isBusy;
+        set
+        {
+            _isBusy = value;
+            OnPropertyChanged(nameof(IsBusy));
+            OnPropertyChanged(nameof(IsIdle));
+            ScanCommand.RaiseCanExecuteChanged();
+            RecoverSelectedCommand.RaiseCanExecuteChanged();
+        }
+    }
+
+    public bool IsIdle => !IsBusy;
+
+    public bool HasScanned { get; private set; }
+    private void SetHasScanned(bool value)
+    {
+        HasScanned = value;
+        OnPropertyChanged(nameof(HasScanned));
+    }
+
+    private bool _selectAll;
+    public bool SelectAll
+    {
+        get => _selectAll;
+        set
+        {
+            _selectAll = value;
+            OnPropertyChanged(nameof(SelectAll));
+            foreach (var item in ScanResults)
+                item.IsSelected = value;
+        }
     }
 
     public RelayCommand RefreshDrivesCommand { get; }
     public RelayCommand ScanCommand { get; }
-    public RelayCommand CancelScanCommand { get; }
+    public RelayCommand CancelCommand { get; }
     public RelayCommand RecoverSelectedCommand { get; }
 
     public MainViewModel()
     {
-        _selectedScanMode = ScanModes[0];
-
         RefreshDrivesCommand = new RelayCommand(RefreshDrivesAsync);
-        ScanCommand = new RelayCommand(ScanAsync, () => !IsScanning && SelectedDrive is not null);
-        CancelScanCommand = new RelayCommand(CancelScanAsync, () => IsScanning);
-        RecoverSelectedCommand = new RelayCommand(RecoverSelectedAsync, () => SelectedResults.Count > 0);
+        ScanCommand = new RelayCommand(ScanAsync, () => !IsBusy && SelectedDrive is not null);
+        CancelCommand = new RelayCommand(CancelAsync, () => IsBusy);
+        RecoverSelectedCommand = new RelayCommand(RecoverSelectedAsync, () => !IsBusy);
 
         _ = RefreshDrivesAsync();
     }
@@ -84,7 +109,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
         Drives.Clear();
         foreach (var drive in DriveEnumerator.ListPhysicalDrives())
             Drives.Add(drive);
-        StatusText = $"Найдено дисков: {Drives.Count}";
+
+        StatusText = Drives.Count > 0
+            ? $"Найдено дисков: {Drives.Count}. Выберите диск и нажмите «Начать поиск»."
+            : "Диски не найдены. Убедитесь, что приложение запущено от имени администратора.";
         return Task.CompletedTask;
     }
 
@@ -92,11 +120,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
     {
         if (SelectedDrive is null) return;
 
-        Results.Clear();
+        ScanResults.Clear();
+        RecoveryLog.Clear();
+        SetHasScanned(false);
         _scanCts = new CancellationTokenSource();
-        IsScanning = true;
+        IsBusy = true;
         Progress = 0;
-        StatusText = "Сканирование...";
+        StatusText = "Идёт поиск удалённых файлов, это может занять время...";
 
         var progress = new Progress<double>(p => Progress = p * 100.0);
 
@@ -104,22 +134,25 @@ public sealed class MainViewModel : INotifyPropertyChanged
         {
             var found = await Task.Run(() => RunScan(SelectedDrive, progress, _scanCts.Token), _scanCts.Token);
             foreach (var file in found)
-                Results.Add(file);
+                ScanResults.Add(new SelectableItem<RecoverableFile>(file));
 
-            StatusText = $"Готово. Найдено файлов: {Results.Count}";
+            StatusText = ScanResults.Count > 0
+                ? $"Найдено файлов для восстановления: {ScanResults.Count}. Отметьте нужные и нажмите «Восстановить»."
+                : "Удалённые файлы не найдены. Попробуйте глубокий поиск.";
         }
         catch (OperationCanceledException)
         {
-            StatusText = "Сканирование отменено.";
+            StatusText = "Поиск остановлен.";
         }
         catch (Exception ex)
         {
-            StatusText = $"Ошибка: {ex.Message}";
-            MessageBox.Show(ex.Message, "Ошибка сканирования", MessageBoxButton.OK, MessageBoxImage.Error);
+            StatusText = "Не удалось выполнить поиск — см. окно ошибки.";
+            MessageBox.Show(FriendlyError(ex), "Ошибка поиска", MessageBoxButton.OK, MessageBoxImage.Error);
         }
         finally
         {
-            IsScanning = false;
+            IsBusy = false;
+            SetHasScanned(true);
         }
     }
 
@@ -128,10 +161,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
         using var disk = RawDisk.Open(drive.DevicePath);
         var results = new List<RecoverableFile>();
 
-        if (SelectedScanMode == ScanModes[0])
+        if (ScanModeIndex == 0)
         {
-            // Fast path: try NTFS first, then FAT32; whichever boot sector
-            // signature matches determines the filesystem.
+            // Быстрый путь: пробуем NTFS, затем FAT32 — по сигнатуре загрузочного сектора.
             try
             {
                 results.AddRange(new NtfsRecoveryEngine().FindDeletedFiles(disk, progress, token));
@@ -139,7 +171,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             }
             catch (InvalidDataException)
             {
-                // Not NTFS — fall through to FAT32.
+                // Не NTFS — пробуем FAT32.
             }
 
             try
@@ -150,17 +182,17 @@ public sealed class MainViewModel : INotifyPropertyChanged
             catch (InvalidDataException)
             {
                 throw new InvalidOperationException(
-                    "Не удалось распознать файловую систему (ожидается NTFS или FAT32). Попробуйте глубокое сканирование.");
+                    "Не удалось распознать файловую систему (ожидается NTFS или FAT32). Попробуйте глубокий поиск.");
             }
         }
 
-        // Deep scan: signature carving across the whole device.
+        // Глубокий поиск: сигнатурный carving по всему устройству.
         long totalSectors = disk.LengthBytes / disk.SectorSize;
         results.AddRange(new SignatureCarver().Scan(disk, 0, totalSectors, progress, token));
         return results;
     }
 
-    private Task CancelScanAsync()
+    private Task CancelAsync()
     {
         _scanCts?.Cancel();
         return Task.CompletedTask;
@@ -168,20 +200,27 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     private async Task RecoverSelectedAsync()
     {
-        if (SelectedDrive is null || SelectedResults.Count == 0) return;
+        if (SelectedDrive is null) return;
+
+        var toRecover = ScanResults.Where(r => r.IsSelected).Select(r => r.Value).ToList();
+        if (toRecover.Count == 0)
+        {
+            MessageBox.Show("Сначала отметьте галочками файлы, которые нужно восстановить.",
+                "Ничего не выбрано", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
 
         var dialog = new Microsoft.Win32.OpenFolderDialog
         {
-            Title = "Выберите папку для восстановленных файлов (на ДРУГОМ диске)."
+            Title = "Куда сохранить восстановленные файлы? Выберите ДРУГОЙ диск."
         };
         if (dialog.ShowDialog() != true) return;
 
         string destination = dialog.FolderName;
-        var toRecover = SelectedResults.ToList();
 
-        IsScanning = true;
-        StatusText = "Восстановление...";
-        var progress = new Progress<(int done, int total)>(p => StatusText = $"Восстановлено {p.done}/{p.total}");
+        IsBusy = true;
+        StatusText = "Восстановление файлов...";
+        var progress = new Progress<(int done, int total)>(p => StatusText = $"Восстановлено {p.done} из {p.total}...");
 
         try
         {
@@ -198,27 +237,34 @@ public sealed class MainViewModel : INotifyPropertyChanged
             int signedValid = log.Count(r => r.SignatureStatus == AuthenticodeStatus.Valid);
             int signedInvalid = log.Count(r => r.SignatureStatus == AuthenticodeStatus.Invalid);
 
-            StatusText = $"Восстановлено файлов: {log.Count} -> {destination}";
+            StatusText = $"Готово: восстановлено {log.Count} файл(ов) в {destination}";
 
-            string summary = $"Восстановлено {log.Count} файл(ов) в {destination}\n\n" +
-                              $"SHA-256 посчитан для всех файлов (см. таблицу отчёта и recovery_report.csv в папке назначения).\n" +
-                              $"С валидной Authenticode-подписью: {signedValid}\n" +
-                              (signedInvalid > 0 ? $"С НЕВАЛИДНОЙ/повреждённой подписью: {signedInvalid} ⚠\n" : "") +
-                              "Остальные файлы просто не имеют подписи — это нормально для документов, фото и т.п.";
+            string summary = $"Восстановлено {log.Count} файл(ов) в:\n{destination}\n\n" +
+                              "Для каждого файла посчитан SHA-256 и проверена цифровая подпись " +
+                              "(см. вкладку «Отчёт восстановления» или recovery_report.csv в папке назначения).\n\n" +
+                              (signedInvalid > 0
+                                  ? $"⚠ У {signedInvalid} файл(ов) подпись повреждена — возможно, файл восстановлен не полностью.\n"
+                                  : "") +
+                              "Файлы без подписи — это нормально (документы, фото, видео её обычно не имеют).";
 
-            MessageBox.Show(summary, "Готово",
+            MessageBox.Show(summary, "Восстановление завершено",
                 MessageBoxButton.OK, signedInvalid > 0 ? MessageBoxImage.Warning : MessageBoxImage.Information);
         }
         catch (Exception ex)
         {
-            StatusText = $"Ошибка восстановления: {ex.Message}";
-            MessageBox.Show(ex.Message, "Ошибка восстановления", MessageBoxButton.OK, MessageBoxImage.Error);
+            StatusText = "Не удалось восстановить файлы — см. окно ошибки.";
+            MessageBox.Show(FriendlyError(ex), "Ошибка восстановления", MessageBoxButton.OK, MessageBoxImage.Error);
         }
         finally
         {
-            IsScanning = false;
+            IsBusy = false;
         }
     }
+
+    private static string FriendlyError(Exception ex) =>
+        ex is System.ComponentModel.Win32Exception
+            ? ex.Message
+            : $"{ex.Message}\n\nЕсли ошибка про доступ — перезапустите приложение от имени администратора.";
 
     public event PropertyChangedEventHandler? PropertyChanged;
     private void OnPropertyChanged(string name) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));

@@ -12,6 +12,23 @@ src/WinFileRecovery.App/    WPF UI (MVVM)
 installer/setup.iss         скрипт Inno Setup
 ```
 
+## Готовый установщик — без сборки на своей машине
+
+В репозитории настроен GitHub Actions workflow
+(`.github/workflows/build-installer.yml`), который сам собирает exe и
+установщик на `windows-latest` — своя Windows-машина/Visual Studio не
+нужна:
+
+1. Откройте репозиторий на GitHub → вкладка **Actions**.
+2. Выберите workflow **Build installer** → **Run workflow** (кнопка справа)
+   → запустится на текущей ветке.
+3. Дождитесь зелёной галочки (обычно 2–4 минуты).
+4. Откройте завершённый run → в разделе **Artifacts** скачайте
+   `WinFileRecovery-Setup` — это и есть готовый `.exe`-установщик.
+
+Также при пуше тега вида `v1.0.0` workflow автоматически создаёт GitHub
+Release с установщиком, приложенным к релизу.
+
 ## Требования
 
 - Windows 10/11 x64
