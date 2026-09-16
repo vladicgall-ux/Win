@@ -60,5 +60,18 @@ internal static class NativeMethods
     // IOCTL_DISK_GET_LENGTH_INFO
     public const uint IOCTL_DISK_GET_LENGTH_INFO = 0x0007405C;
 
+    // IOCTL_STORAGE_GET_DEVICE_NUMBER — maps a volume/directory back to the
+    // physical disk index backing it, so recovery can refuse to write onto
+    // the same physical disk it is reading from.
+    public const uint IOCTL_STORAGE_GET_DEVICE_NUMBER = 0x2D1080;
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct STORAGE_DEVICE_NUMBER
+    {
+        public int DeviceType;
+        public int DeviceNumber;
+        public int PartitionNumber;
+    }
+
     public const uint FILE_BEGIN = 0;
 }

@@ -24,12 +24,23 @@ public sealed class MftReader
         int recordSize = _boot.BytesPerFileRecord;
         int sectorsPerRecord = recordSize / _boot.BytesPerSector;
         long mftStartSector = _boot.MftStartCluster * _boot.SectorsPerCluster;
+        long maxCluster = _boot.TotalSectors / _boot.SectorsPerCluster;
 
         // First, parse record 0 ($MFT itself) to learn its real extent via
         // its own $DATA data runs; fall back to a heuristic scan length if
-        // that fails (e.g. record 0 is damaged).
-        byte[] firstRecordRaw = _volume.ReadSectors(mftStartSector, sectorsPerRecord);
-        var mftSelfRecord = MftRecord.Parse(firstRecordRaw, 0, _boot.BytesPerSector);
+        // that fails (e.g. record 0 is damaged, or MftStartCluster itself
+        // points outside the volume on a corrupt boot sector).
+        MftRecord? mftSelfRecord = null;
+        try
+        {
+            byte[] firstRecordRaw = _volume.ReadSectors(mftStartSector, sectorsPerRecord);
+            mftSelfRecord = MftRecord.Parse(firstRecordRaw, 0, _boot.BytesPerSector, maxCluster);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // fall through with mftSelfRecord == null; EnumerateMftClusterRuns's
+            // fallback path is still bounded by RawDisk's own range checks.
+        }
 
         long totalRecords = EstimateTotalRecords(mftSelfRecord, recordSize);
 
@@ -48,11 +59,12 @@ public sealed class MftReader
                 {
                     raw = _volume.ReadSectors(sector, sectorsPerRecord);
                 }
-                catch (System.ComponentModel.Win32Exception)
+                catch (Exception ex) when (ex is not OperationCanceledException)
                 {
-                    // Read past the end of the device, or a bad sector —
-                    // stop this run rather than aborting the whole scan;
-                    // records already found stay valid.
+                    // Read past the end of the device, an out-of-range
+                    // request (e.g. a corrupt fallback span), or a bad
+                    // sector — stop this run rather than aborting the whole
+                    // scan; records already found stay valid.
                     yield break;
                 }
 
@@ -62,7 +74,7 @@ public sealed class MftReader
                 MftRecord? rec = null;
                 try
                 {
-                    rec = MftRecord.Parse(raw, recordsRead, _boot.BytesPerSector);
+                    rec = MftRecord.Parse(raw, recordsRead, _boot.BytesPerSector, maxCluster);
                 }
                 catch (Exception)
                 {

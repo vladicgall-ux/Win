@@ -17,11 +17,27 @@ public sealed class SignatureCarver
     private const int ChunkSectors = 65536; // 32 MiB @ 512-byte sectors
     private const int OverlapBytes = 64 * 1024;
 
-    private readonly IReadOnlyList<FileSignature> _signatures;
+    /// <summary>Default cap on the number of hits returned by one scan — a short signature (e.g. 3-4 bytes) can match incidentally many times on a large disk.</summary>
+    public const int DefaultMaxResults = 100_000;
 
-    public SignatureCarver(IReadOnlyList<FileSignature>? signatures = null)
+    /// <summary>Default cap on the summed (possibly optimistic — no-footer) length of all hits, so a run of false positives can't claim to be many terabytes of "found" data.</summary>
+    public const long DefaultMaxTotalRecoveredSizeBytes = 2L * 1024 * 1024 * 1024 * 1024; // 2 TiB
+
+    private readonly IReadOnlyList<FileSignature> _signatures;
+    private readonly int _maxResults;
+    private readonly long _maxTotalRecoveredSizeBytes;
+
+    /// <summary>True once a scan stopped early because it hit <see cref="DefaultMaxResults"/> or the total-size cap, rather than exhausting the requested sector range.</summary>
+    public bool WasTruncated { get; private set; }
+
+    public SignatureCarver(
+        IReadOnlyList<FileSignature>? signatures = null,
+        int maxResults = DefaultMaxResults,
+        long maxTotalRecoveredSizeBytes = DefaultMaxTotalRecoveredSizeBytes)
     {
         _signatures = signatures ?? SignatureCatalog.Default;
+        _maxResults = maxResults;
+        _maxTotalRecoveredSizeBytes = maxTotalRecoveredSizeBytes;
     }
 
     public IEnumerable<RecoverableFile> Scan(
@@ -31,10 +47,12 @@ public sealed class SignatureCarver
         IProgress<double>? progress = null,
         CancellationToken cancellationToken = default)
     {
-        int chunkBytes = ChunkSectors * disk.SectorSize;
+        WasTruncated = false;
         long totalSectors = endSector - startSector;
         byte[] carry = Array.Empty<byte>();
-        long carryStartOffset = 0;
+
+        int resultCount = 0;
+        long totalRecoveredSize = 0;
 
         for (long sector = startSector; sector < endSector; sector += ChunkSectors)
         {
@@ -48,12 +66,21 @@ public sealed class SignatureCarver
             long windowStartOffset = chunkOffset - carry.Length;
 
             foreach (var hit in FindSignaturesInWindow(window, windowStartOffset, disk))
+            {
+                if (resultCount >= _maxResults || totalRecoveredSize + hit.LengthBytes > _maxTotalRecoveredSizeBytes)
+                {
+                    WasTruncated = true;
+                    yield break;
+                }
+
+                resultCount++;
+                totalRecoveredSize += hit.LengthBytes;
                 yield return hit;
+            }
 
             // Keep the tail of this chunk as carry-over for the next window.
             int keep = Math.Min(OverlapBytes, chunk.Length);
             carry = chunk[^keep..];
-            carryStartOffset = chunkOffset + chunk.Length - keep;
 
             progress?.Report(Math.Min(1.0, (double)(sector - startSector + sectorsToRead) / totalSectors));
         }

@@ -45,7 +45,7 @@ public sealed class MftRecord
     /// <see cref="ApplyFixup"/>). Returns null for records that are not
     /// valid FILE records (empty/corrupt slack space).
     /// </summary>
-    public static MftRecord? Parse(byte[] raw, long recordIndex, int bytesPerSector)
+    public static MftRecord? Parse(byte[] raw, long recordIndex, int bytesPerSector, long? maxCluster = null)
     {
         if (raw.Length < 48) return null;
         if (raw[0] != 'F' || raw[1] != 'I' || raw[2] != 'L' || raw[3] != 'E')
@@ -118,8 +118,8 @@ public sealed class MftRecord
                             long realSize = BitConverter.ToInt64(record, pos + 48);
                             ushort runListOffset = BitConverter.ToUInt16(record, pos + 32);
                             int runListLength = (int)attrLength - runListOffset;
-                            dataRuns = DataRunParser.Parse(record, pos + runListOffset, runListLength);
-                            logicalSize = realSize;
+                            dataRuns = DataRunParser.Parse(record, pos + runListOffset, runListLength, maxCluster);
+                            logicalSize = realSize >= 0 ? realSize : 0;
                         }
                     }
                     break;

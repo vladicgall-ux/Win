@@ -213,6 +213,7 @@
                                         <DataGridTextColumn Header="Размер" Binding="{Binding SizeBytes, Converter={StaticResource Bytes}}" Width="90"/>
                                         <DataGridTextColumn Header="SHA-256" Binding="{Binding Sha256}" Width="220"/>
                                         <DataGridTextColumn Header="Подпись" Binding="{Binding SignatureStatus}" Width="100"/>
+                                        <DataGridTextColumn Header="Ошибка" Binding="{Binding Error}" Width="*"/>
                                     </DataGrid.Columns>
                                 </DataGrid>
                             </TabItem>

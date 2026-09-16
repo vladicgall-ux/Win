@@ -20,6 +20,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 {
     private readonly RecoveryOrchestrator _orchestrator = new();
     private CancellationTokenSource? _scanCts;
+    private bool _lastScanWasTruncated;
 
     public ObservableCollection<PhysicalDrive> Drives { get; } = new();
     public ObservableCollection<SelectableItem<RecoverableFile>> ScanResults { get; } = new();
@@ -200,6 +201,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         try
         {
+            _lastScanWasTruncated = false;
             var found = await Task.Run(() => RunScan(SelectedDrive, progress, _scanCts.Token), _scanCts.Token);
             foreach (var file in found)
                 ScanResults.Add(new SelectableItem<RecoverableFile>(file));
@@ -207,6 +209,17 @@ public sealed class MainViewModel : INotifyPropertyChanged
             StatusText = ScanResults.Count > 0
                 ? $"Найдено файлов для восстановления: {ScanResults.Count}. Отметьте нужные и нажмите «Восстановить»."
                 : "Удалённые файлы не найдены. Попробуйте глубокий поиск.";
+
+            if (_lastScanWasTruncated)
+            {
+                StatusText += " Достигнут лимит результатов — список может быть неполным.";
+                MessageBox.Show(
+                    $"Поиск остановлен при достижении лимита ({SignatureCarver.DefaultMaxResults:N0} файлов или " +
+                    $"{SignatureCarver.DefaultMaxTotalRecoveredSizeBytes / 1024 / 1024 / 1024 / 1024} ТБ суммарного размера).\n\n" +
+                    "Это защита от переполнения памяти при большом числе случайных совпадений сигнатур. " +
+                    "Сузьте поиск по типу файла или периоду и запустите снова, чтобы найти остальное.",
+                    "Список найденных файлов неполный", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
         }
         catch (OperationCanceledException)
         {
@@ -272,7 +285,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
             : SignatureCatalog.Default.Where(s => allowedExtensions.Contains(s.Extension)).ToList();
 
         long totalSectors = disk.LengthBytes / disk.SectorSize;
-        results.AddRange(new SignatureCarver(signatures).Scan(disk, 0, totalSectors, progress, token));
+        var carver = new SignatureCarver(signatures);
+        results.AddRange(carver.Scan(disk, 0, totalSectors, progress, token));
+        _lastScanWasTruncated = carver.WasTruncated;
         return results;
     }
 
@@ -323,6 +338,18 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         string destination = dialog.FolderName;
 
+        if (DiskIdentity.IsSamePhysicalDisk(destination, SelectedDrive.Index))
+        {
+            MessageBox.Show(
+                "Нельзя сохранять восстановленные данные на исходный диск.\n\n" +
+                "Запись новых файлов на тот же физический диск, с которого выполняется восстановление, " +
+                "может навсегда затереть данные удалённых файлов, которые ещё не восстановлены — " +
+                "включая те, что вы только что выбрали.\n\n" +
+                "Выберите папку на другом физическом накопителе (внешний диск, флешка, другой встроенный SSD/HDD).",
+                "Опасный выбор папки", MessageBoxButton.OK, MessageBoxImage.Error);
+            return;
+        }
+
         IsBusy = true;
         StatusText = "Восстановление файлов...";
         var progress = new Progress<(int done, int total)>(p => StatusText = $"Восстановлено {p.done} из {p.total}...");
@@ -339,21 +366,28 @@ public sealed class MainViewModel : INotifyPropertyChanged
             foreach (var entry in log)
                 RecoveryLog.Add(entry);
 
+            int succeeded = log.Count(r => r.Succeeded);
+            int failed = log.Count(r => !r.Succeeded);
             int signedValid = log.Count(r => r.SignatureStatus == AuthenticodeStatus.Valid);
             int signedInvalid = log.Count(r => r.SignatureStatus == AuthenticodeStatus.Invalid);
 
-            StatusText = $"Готово: восстановлено {log.Count} файл(ов) в {destination}";
+            StatusText = failed > 0
+                ? $"Готово: восстановлено {succeeded} из {log.Count} файл(ов) в {destination} ({failed} с ошибкой)"
+                : $"Готово: восстановлено {log.Count} файл(ов) в {destination}";
 
-            string summary = $"Восстановлено {log.Count} файл(ов) в:\n{destination}\n\n" +
+            string summary = $"Восстановлено успешно: {succeeded} из {log.Count}\nКуда: {destination}\n\n" +
                               "Для каждого файла посчитан SHA-256 и проверена цифровая подпись " +
                               "(см. вкладку «Отчёт восстановления» или recovery_report.csv в папке назначения).\n\n" +
+                              (failed > 0
+                                  ? $"⚠ Не удалось восстановить {failed} файл(ов) — повреждены метаданные или недостаточно места. Причина указана в отчёте.\n"
+                                  : "") +
                               (signedInvalid > 0
                                   ? $"⚠ У {signedInvalid} файл(ов) подпись повреждена — возможно, файл восстановлен не полностью.\n"
                                   : "") +
                               "Файлы без подписи — это нормально (документы, фото, видео её обычно не имеют).";
 
             MessageBox.Show(summary, "Восстановление завершено",
-                MessageBoxButton.OK, signedInvalid > 0 ? MessageBoxImage.Warning : MessageBoxImage.Information);
+                MessageBoxButton.OK, (failed > 0 || signedInvalid > 0) ? MessageBoxImage.Warning : MessageBoxImage.Information);
         }
         catch (Exception ex)
         {

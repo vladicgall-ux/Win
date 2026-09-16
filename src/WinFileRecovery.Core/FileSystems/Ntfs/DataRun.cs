@@ -7,9 +7,13 @@ public readonly record struct DataRun(long StartCluster, long ClusterCount);
 /// Decodes the compact run-length "data runs" byte stream NTFS uses to
 /// describe non-resident attribute storage (e.g. $DATA for a normal file).
 /// </summary>
-public static class DataRunParser
-{
-    public static List<DataRun> Parse(byte[] buffer, int offset, int length)
+    // A run claiming more clusters than any real volume could have is a
+    // sure sign of corruption; reject rather than let it flow into a huge
+    // allocation or read range further down the pipeline. 2^40 clusters is
+    // already far larger than any real NTFS volume (petabytes at 4 KiB/cluster).
+    private const long MaxPlausibleClusterCount = 1L << 40;
+
+    public static List<DataRun> Parse(byte[] buffer, int offset, int length, long? maxCluster = null)
     {
         var runs = new List<DataRun>();
         if (offset < 0 || offset > buffer.Length || length < 0) return runs;
@@ -45,8 +49,19 @@ public static class DataRunParser
             // offsetFieldSize == 0 => sparse run (no physical clusters);
             // currentLcn stays unchanged, and we skip emitting a run.
 
-            if (offsetFieldSize > 0)
+            // Reject an individually corrupt run instead of trusting it: a
+            // negative or out-of-volume cluster, or an absurd run length,
+            // would otherwise become a negative/oversized byte offset once
+            // multiplied by the cluster size downstream.
+            bool runIsValid = runLength > 0
+                && runLength <= MaxPlausibleClusterCount
+                && currentLcn >= 0
+                && (maxCluster is null || currentLcn + runLength <= maxCluster.Value);
+
+            if (offsetFieldSize > 0 && runIsValid)
                 runs.Add(new DataRun(currentLcn, runLength));
+            else if (offsetFieldSize > 0)
+                break; // stop at the first bad run rather than risk resuming out of sync
         }
 
         return runs;
