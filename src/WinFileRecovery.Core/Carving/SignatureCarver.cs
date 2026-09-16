@@ -10,9 +10,11 @@ namespace WinFileRecovery.Core.Carving;
 /// </summary>
 public sealed class SignatureCarver
 {
-    // 4 MiB chunks, sector aligned, with an overlap equal to the largest
+    // 32 MiB chunks, sector aligned, with an overlap equal to the largest
     // header/footer so matches spanning a chunk boundary are not missed.
-    private const int ChunkSectors = 8192; // 4 MiB @ 512-byte sectors
+    // Larger chunks amortize the per-ReadFile syscall/seek overhead, which
+    // dominates total scan time far more than the in-memory signature search.
+    private const int ChunkSectors = 65536; // 32 MiB @ 512-byte sectors
     private const int OverlapBytes = 64 * 1024;
 
     private readonly IReadOnlyList<FileSignature> _signatures;
@@ -98,20 +100,16 @@ public sealed class SignatureCarver
         return Math.Min(sig.MaxSizeBytes, disk.LengthBytes - absoluteStart);
     }
 
+    /// <summary>
+    /// Span-based search: .NET's MemoryExtensions.IndexOf for byte spans is
+    /// SIMD-vectorized, unlike a hand-rolled nested loop, and is what
+    /// actually matters once disk I/O itself is no longer the bottleneck.
+    /// </summary>
     private static int IndexOf(byte[] haystack, byte[] needle, int from)
     {
-        if (needle.Length == 0 || from < 0) return -1;
-        int limit = haystack.Length - needle.Length;
-        for (int i = Math.Max(from, 0); i <= limit; i++)
-        {
-            bool match = true;
-            for (int j = 0; j < needle.Length; j++)
-            {
-                if (haystack[i + j] != needle[j]) { match = false; break; }
-            }
-            if (match) return i;
-        }
-        return -1;
+        if (needle.Length == 0 || from < 0 || from >= haystack.Length) return -1;
+        int found = haystack.AsSpan(from).IndexOf(needle);
+        return found < 0 ? -1 : found + from;
     }
 
     private static byte[] Combine(byte[] a, byte[] b)
