@@ -7,6 +7,8 @@ public readonly record struct DataRun(long StartCluster, long ClusterCount);
 /// Decodes the compact run-length "data runs" byte stream NTFS uses to
 /// describe non-resident attribute storage (e.g. $DATA for a normal file).
 /// </summary>
+public static class DataRunParser
+{
     // A run claiming more clusters than any real volume could have is a
     // sure sign of corruption; reject rather than let it flow into a huge
     // allocation or read range further down the pipeline. 2^40 clusters is
