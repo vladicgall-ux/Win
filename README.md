@@ -1,0 +1,91 @@
+# WinFileRecovery
+
+Десктопное приложение для Windows (WPF, .NET 8) для восстановления удалённых
+файлов: прямое чтение секторов диска, разбор структур NTFS ($MFT) и FAT32
+(записи каталога), а также сигнатурный carving по содержимому диска.
+
+## Структура
+
+```
+src/WinFileRecovery.Core/   логика: raw-доступ к диску, NTFS/FAT32, carving
+src/WinFileRecovery.App/    WPF UI (MVVM)
+installer/setup.iss         скрипт Inno Setup
+```
+
+## Требования
+
+- Windows 10/11 x64
+- Visual Studio 2022 (17.8+) или .NET SDK 8.0+
+- Права администратора для запуска (raw-доступ к диску их требует)
+
+## Сборка и запуск (для разработки)
+
+```powershell
+dotnet build .\WinFileRecovery.sln -c Debug
+dotnet run --project .\src\WinFileRecovery.App
+```
+
+Приложение попросит подтверждение UAC при запуске — это ожидаемо
+(`app.manifest` задаёт `requireAdministrator`), т.к. открытие
+`\\.\PhysicalDriveN` без прав администратора завершится
+`ERROR_ACCESS_DENIED`.
+
+## Publish — сборка в один exe-файл
+
+```powershell
+dotnet publish .\src\WinFileRecovery.App\WinFileRecovery.App.csproj `
+    -c Release -r win-x64 --self-contained true `
+    -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
+```
+
+Результат: `src\WinFileRecovery.App\bin\Release\net8.0-windows\win-x64\publish\WinFileRecovery.exe`
+— один файл, не требующий установленного .NET Runtime на целевой машине.
+Манифест (`requireAdministrator`) встроен в exe, поэтому Windows сама
+покажет запрос UAC при запуске, без ручного «Запуск от имени администратора».
+
+## Установщик (Inno Setup)
+
+1. Установите [Inno Setup](https://jrsoftware.org/isinfo.php) (бесплатный).
+2. Выполните `dotnet publish` как выше (installer/setup.iss ссылается на
+   путь публикации).
+3. Скомпилируйте скрипт:
+   ```powershell
+   & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" .\installer\setup.iss
+   ```
+4. Готовый установщик появится в `installer\Output\WinFileRecovery-Setup-1.0.0.exe`.
+
+Установщик:
+- запрашивает права администратора при запуске (`PrivilegesRequired=admin`);
+- копирует единственный self-contained exe в `Program Files\WinFileRecovery`;
+- создаёт ярлыки в меню «Пуск» и (опционально) на рабочем столе;
+- регистрирует стандартную запись удаления в «Программы и компоненты».
+
+Сам `WinFileRecovery.exe` при каждом запуске (в том числе из установленного
+расположения) продолжает запрашивать UAC — это задаётся его `app.manifest`,
+а не установщиком, и сохраняется независимо от способа запуска.
+
+### Альтернатива: MSIX / Visual Studio Installer Projects
+
+Если предпочтителен MSIX (для распространения через Microsoft Store или
+корпоративный деплой) — используйте `dotnet publish` с
+`-p:WindowsPackageType=MSIX`, либо расширение **Visual Studio Installer
+Projects** для классического .msi. Оба варианта тоже должны включать
+`requireAdministrator` в манифесте приложения — сам манифест не меняется.
+
+## Важные ограничения текущей реализации
+
+- **FAT32**: короткие имена восстанавливаются точно; длинные имена (VFAT
+  LFN) не реконструируются, так как их записи-продолжения помечаются
+  удалёнными независимо от короткого имени и ненадёжны. Каталоги читаются
+  в пределах первого кластера (без прохода по цепочке FAT для очень больших
+  каталогов).
+- **NTFS**: восстановление по фрагментированным `$DATA` (несколько data
+  runs) поддержано корректно; цепочка кластеров самого `$MFT` берётся из
+  его собственных data runs, с эвристическим fallback, если запись 0
+  повреждена.
+- Всегда восстанавливайте файлы **на другой физический диск**, отличный от
+  сканируемого — запись на тот же диск может перезаписать ещё не
+  восстановленные удалённые файлы.
+- Recovery работает по best-effort: как только удалённые сектора/кластеры
+  перезаписаны новыми данными, восстановление конкретного файла уже
+  невозможно ни одним инструментом.

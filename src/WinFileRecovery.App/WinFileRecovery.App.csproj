@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <Platforms>x64</Platforms>
+    <RootNamespace>WinFileRecovery.App</RootNamespace>
+    <AssemblyName>WinFileRecovery</AssemblyName>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- Add <ApplicationIcon>app.ico</ApplicationIcon> once you have a real .ico file. -->
+
+    <!-- Single-file, self-contained publish settings (see README "Publish"). -->
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\WinFileRecovery.Core\WinFileRecovery.Core.csproj" />
+  </ItemGroup>
+
+</Project>
